@@ -1,12 +1,14 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
-from fastapi.middleware.cors import CORSMiddleware  # Important for frontend integration!
+from fastapi.middleware.cors import CORSMiddleware
 import tensorflow as tf
 from PIL import Image
 import numpy as np
 import io
 
-# Load TFLite model
+# ------------------------------
+# Load the TFLite model
+# ------------------------------
 try:
     interpreter = tf.lite.Interpreter(model_path="cattle_model.tflite")
     interpreter.allocate_tensors()
@@ -15,10 +17,12 @@ try:
     print("✅ Model loaded successfully!")
 except Exception as e:
     print(f"❌ Failed to load model: {e}")
-    # Consider exiting if model is essential
-    # import sys; sys.exit(1)
+    import sys
+    sys.exit(1)
 
-# Your class labels
+# ------------------------------
+# Define class names (39 breeds)
+# ------------------------------
 class_names = [
     "Alambadi", "Amritmahal", "Ayrshire", "Banni", "Bargur", "Bhadawari",
     "Brown Swiss", "Deoni", "Gir", "Guernsey", "Hallikan", "Hariana",
@@ -29,31 +33,40 @@ class_names = [
     "Toda", "Umblachery", "Vechur"
 ]
 
-app = FastAPI(title="Cattle Breed Classifier API", version="1.0")
+# ------------------------------
+# FastAPI app setup
+# ------------------------------
+app = FastAPI(
+    title="Cattle Breed Classifier API",
+    description="Upload an image to classify cattle/buffalo breeds using TensorFlow Lite.",
+    version="1.0"
+)
 
-# Add CORS middleware to allow requests from frontends
+# Enable CORS (for frontend/mobile app integration)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For production, replace ["*"] with specific origins like ["https://your-frontend.com"]
+    allow_origins=["*"],  # Change "*" to your frontend domain in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ------------------------------
+# Helper function for preprocessing
+# ------------------------------
 def preprocess_image(image_bytes):
-    """Preprocess the uploaded image for model prediction"""
-    try:
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        img = img.resize((224, 224))
-        img = np.array(img, dtype=np.float32) / 255.0
-        img = np.expand_dims(img, axis=0)
-        return img
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid image: {str(e)}")
+    """Preprocess uploaded image for model prediction"""
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    img = img.resize((224, 224))  # Match training size
+    img = np.array(img, dtype=np.float32) / 255.0
+    img = np.expand_dims(img, axis=0)
+    return img
 
+# ------------------------------
+# Root endpoint
+# ------------------------------
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """Root endpoint with API information"""
     return """
     <html>
         <head>
@@ -61,25 +74,31 @@ async def root():
         </head>
         <body>
             <h1>🐄 Cattle Breed Classifier API</h1>
-            <p>This API classifies cattle breeds from images using TensorFlow Lite.</p>
+            <p>This API classifies cattle/buffalo breeds from images using TensorFlow Lite.</p>
             <ul>
-                <li><strong>API Documentation:</strong> <a href="/docs">/docs</a></li>
-                <li><strong>Alternative Docs:</strong> <a href="/redoc">/redoc</a></li>
+                <li><strong>API Documentation:</strong> <a href="/docs">Swagger UI</a></li>
+                <li><strong>Alternative Docs:</strong> <a href="/redoc">ReDoc</a></li>
                 <li><strong>Prediction Endpoint:</strong> POST /predict</li>
             </ul>
-            <p>Submit a cattle image to <code>/predict</code> to get breed classifications.</p>
         </body>
     </html>
     """
 
-@app.post("/predict")
-async def predict(file: UploadFile = File(...)):
-    """Predict the cattle breed from an uploaded image"""
-    # Validate file type
+# ------------------------------+
+# Prediction endpoint
+# ------------------------------
+@app.post(
+    "/predict",
+    summary="Predict cattle breed from an image",
+    description="Upload a JPG/PNG image and get top-2 breed predictions.",
+)
+async def predict(file: UploadFile = File(..., description="Upload cattle/buffalo image")):
+    # Validate input file type
     if not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
-    
+
     try:
+        # Read and preprocess image
         image_bytes = await file.read()
         img = preprocess_image(image_bytes)
 
@@ -88,10 +107,9 @@ async def predict(file: UploadFile = File(...)):
         interpreter.invoke()
         predictions = interpreter.get_tensor(output_details[0]['index'])[0]
 
-        # Get top 2 predictions with confidence percentages
+        # Get top 2 predictions
         top_indices = predictions.argsort()[-2:][::-1]
         results = []
-        
         for i in top_indices:
             confidence_percent = float(predictions[i]) * 100
             results.append({
@@ -104,12 +122,13 @@ async def predict(file: UploadFile = File(...)):
             "predictions": results,
             "top_prediction": results[0] if results else None
         })
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
+# ------------------------------
 # Health check endpoint
+# ------------------------------
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for deployment monitoring"""
     return {"status": "healthy", "model_loaded": True}
